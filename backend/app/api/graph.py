@@ -12,12 +12,14 @@ from . import graph_bp
 from ..config import Config
 from ..services.ontology_generator import OntologyGenerator
 from ..services.graph_builder import GraphBuilderService
+from ..services.local_graph_builder import LocalGraphBuilder
 from ..services.text_processor import TextProcessor
 from ..utils.file_parser import FileParser
 from ..utils.logger import get_logger
 from ..utils.locale import t, get_locale, set_locale
 from ..models.task import TaskManager, TaskStatus
 from ..models.project import ProjectManager, ProjectStatus
+from ..models.world import WorldManager
 
 # 获取日志器
 logger = get_logger('mirofish.api')
@@ -29,6 +31,31 @@ def allowed_file(filename: str) -> bool:
         return False
     ext = os.path.splitext(filename)[1].lower().lstrip('.')
     return ext in Config.ALLOWED_EXTENSIONS
+
+
+def _generate_and_save_project_ontology(project, document_texts, simulation_requirement, additional_context=None):
+    logger.info("调用 LLM 生成本体定义...")
+    generator = OntologyGenerator()
+    ontology = generator.generate(
+        document_texts=document_texts,
+        simulation_requirement=simulation_requirement,
+        additional_context=additional_context if additional_context else None
+    )
+
+    entity_count = len(ontology.get("entity_types", []))
+    edge_count = len(ontology.get("edge_types", []))
+    logger.info(f"本体生成完成: {entity_count} 个实体类型, {edge_count} 个关系类型")
+
+    project.simulation_requirement = simulation_requirement
+    project.ontology = {
+        "entity_types": ontology.get("entity_types", []),
+        "edge_types": ontology.get("edge_types", [])
+    }
+    project.analysis_summary = ontology.get("analysis_summary", "")
+    project.status = ProjectStatus.ONTOLOGY_GENERATED
+    ProjectManager.save_project(project)
+
+    return ontology
 
 
 # ============== 项目管理接口 ==============
@@ -213,26 +240,12 @@ def generate_ontology():
         logger.info(f"文本提取完成，共 {len(all_text)} 字符")
         
         # 生成本体
-        logger.info("调用 LLM 生成本体定义...")
-        generator = OntologyGenerator()
-        ontology = generator.generate(
+        ontology = _generate_and_save_project_ontology(
+            project,
             document_texts=document_texts,
             simulation_requirement=simulation_requirement,
-            additional_context=additional_context if additional_context else None
+            additional_context=additional_context,
         )
-        
-        # 保存本体到项目
-        entity_count = len(ontology.get("entity_types", []))
-        edge_count = len(ontology.get("edge_types", []))
-        logger.info(f"本体生成完成: {entity_count} 个实体类型, {edge_count} 个关系类型")
-        
-        project.ontology = {
-            "entity_types": ontology.get("entity_types", []),
-            "edge_types": ontology.get("edge_types", [])
-        }
-        project.analysis_summary = ontology.get("analysis_summary", "")
-        project.status = ProjectStatus.ONTOLOGY_GENERATED
-        ProjectManager.save_project(project)
         logger.info(f"=== 本体生成完成 === 项目ID: {project.project_id}")
         
         return jsonify({
@@ -247,6 +260,91 @@ def generate_ontology():
             }
         })
         
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@graph_bp.route('/ontology/generate-from-project', methods=['POST'])
+def generate_ontology_from_project():
+    """基于项目现有文本生成本体。"""
+    try:
+        data = request.get_json() or {}
+        project_id = data.get('project_id')
+        simulation_requirement = data.get('simulation_requirement', '')
+        additional_context = data.get('additional_context', '')
+        force = data.get('force', False)
+
+        if not project_id:
+            return jsonify({
+                "success": False,
+                "error": t('api.requireProjectId')
+            }), 400
+
+        project = ProjectManager.get_project(project_id)
+        if not project:
+            return jsonify({
+                "success": False,
+                "error": t('api.projectNotFound', id=project_id)
+            }), 404
+
+        if project.ontology and not force:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "project_id": project.project_id,
+                    "project_name": project.name,
+                    "ontology": project.ontology,
+                    "analysis_summary": project.analysis_summary,
+                    "total_text_length": project.total_text_length,
+                    "project": project.to_dict(),
+                }
+            })
+
+        text = ProjectManager.get_extracted_text(project_id)
+        if not text and project.world_id:
+            world = WorldManager.get_world(project.world_id)
+            if world:
+                text = world.to_text()
+                project.total_text_length = len(text)
+                ProjectManager.save_extracted_text(project.project_id, text)
+
+        if not text:
+            return jsonify({
+                "success": False,
+                "error": t('api.textNotFound')
+            }), 400
+
+        if not simulation_requirement:
+            simulation_requirement = project.simulation_requirement or (
+                f"请基于世界观项目《{project.name or '未命名项目'}》构建适用于角色关系、关键事件、时间演化和后续推演的知识图谱本体。"
+            )
+
+        project.total_text_length = len(text)
+        ontology = _generate_and_save_project_ontology(
+            project,
+            document_texts=[text],
+            simulation_requirement=simulation_requirement,
+            additional_context=additional_context,
+        )
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "project_id": project.project_id,
+                "project_name": project.name,
+                "ontology": {
+                    "entity_types": ontology.get("entity_types", []),
+                    "edge_types": ontology.get("edge_types", []),
+                },
+                "analysis_summary": ontology.get("analysis_summary", ""),
+                "total_text_length": project.total_text_length,
+                "project": project.to_dict(),
+            }
+        })
     except Exception as e:
         return jsonify({
             "success": False,
@@ -282,17 +380,6 @@ def build_graph():
     """
     try:
         logger.info("=== 开始构建图谱 ===")
-        
-        # 检查配置
-        errors = []
-        if not Config.ZEP_API_KEY:
-            errors.append(t('api.zepApiKeyMissing'))
-        if errors:
-            logger.error(f"配置错误: {errors}")
-            return jsonify({
-                "success": False,
-                "error": t('api.configError', details="; ".join(errors))
-            }), 500
         
         # 解析请求
         data = request.get_json() or {}
@@ -379,100 +466,85 @@ def build_graph():
             set_locale(current_locale)
             build_logger = get_logger('mirofish.build')
             try:
-                build_logger.info(f"[{task_id}] 开始构建图谱...")
-                task_manager.update_task(
-                    task_id, 
-                    status=TaskStatus.PROCESSING,
-                    message=t('progress.initGraphService')
-                )
-                
-                # 创建图谱构建服务
-                builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
-                
-                # 分块
+                build_logger.info(f"[{task_id}] 开始构建本地图谱...")
                 task_manager.update_task(
                     task_id,
-                    message=t('progress.textChunking'),
-                    progress=5
+                    status=TaskStatus.PROCESSING,
+                    message="初始化本地图谱构建服务..."
                 )
-                chunks = TextProcessor.split_text(
-                    text, 
-                    chunk_size=chunk_size, 
-                    overlap=chunk_overlap
-                )
-                total_chunks = len(chunks)
-                
+
+                # 创建本地图谱构建服务（不依赖 Zep）
+                builder = LocalGraphBuilder()
+
                 # 创建图谱
                 task_manager.update_task(
                     task_id,
-                    message=t('progress.creatingZepGraph'),
+                    message="创建图谱...",
                     progress=10
                 )
                 graph_id = builder.create_graph(name=graph_name)
-                
+
                 # 更新项目的graph_id
                 project.graph_id = graph_id
                 ProjectManager.save_project(project)
-                
+
                 # 设置本体
                 task_manager.update_task(
                     task_id,
-                    message=t('progress.settingOntology'),
+                    message="设置本体定义...",
                     progress=15
                 )
                 builder.set_ontology(graph_id, ontology)
-                
-                # 添加文本（progress_callback 签名是 (msg, progress_ratio)）
-                def add_progress_callback(msg, progress_ratio):
-                    progress = 15 + int(progress_ratio * 40)  # 15% - 55%
-                    task_manager.update_task(
-                        task_id,
-                        message=msg,
-                        progress=progress
-                    )
-                
+
+                # 从关联的世界观数据构建图谱节点和边
                 task_manager.update_task(
                     task_id,
-                    message=t('progress.addingChunks', count=total_chunks),
-                    progress=15
+                    message="从世界观数据构建节点和边...",
+                    progress=20
                 )
-                
+
+                world_data = {}
+                project_settings = project.settings if isinstance(project.settings, dict) else {}
+                world_id = project_settings.get("source_world_id") or getattr(project, "world_id", None)
+                if world_id:
+                    try:
+                        world = WorldManager.get_world(world_id)
+                        if world:
+                            world_data = world.to_dict()
+                            build_logger.info(f"加载世界观数据: {world_id}, {len(world_data.get('entities', []))} 实体, {len(world_data.get('events', []))} 事件")
+                    except Exception as e:
+                        build_logger.warning(f"加载世界观数据失败: {e}")
+
+                def build_progress_callback(msg, progress_ratio):
+                    progress = 20 + int(progress_ratio * 50)
+                    task_manager.update_task(task_id, message=msg, progress=progress)
+
                 episode_uuids = builder.add_text_batches(
-                    graph_id, 
-                    chunks,
-                    batch_size=3,
-                    progress_callback=add_progress_callback
+                    graph_id,
+                    world_data,
+                    progress_callback=build_progress_callback,
                 )
-                
-                # 等待Zep处理完成（查询每个episode的processed状态）
+
+                # 本地构建无需等待
                 task_manager.update_task(
                     task_id,
-                    message=t('progress.waitingZepProcess'),
-                    progress=55
+                    message="图谱节点和边已生成",
+                    progress=75
                 )
-                
-                def wait_progress_callback(msg, progress_ratio):
-                    progress = 55 + int(progress_ratio * 35)  # 55% - 90%
-                    task_manager.update_task(
-                        task_id,
-                        message=msg,
-                        progress=progress
-                    )
-                
-                builder._wait_for_episodes(episode_uuids, wait_progress_callback)
-                
+                builder._wait_for_episodes([], lambda msg, r: task_manager.update_task(task_id, message=msg, progress=75 + int(r * 15)))
+
                 # 获取图谱数据
                 task_manager.update_task(
                     task_id,
-                    message=t('progress.fetchingGraphData'),
+                    message="获取图谱数据...",
                     progress=95
                 )
                 graph_data = builder.get_graph_data(graph_id)
-                
+
                 # 更新项目状态
                 project.status = ProjectStatus.GRAPH_COMPLETED
                 ProjectManager.save_project(project)
-                
+
                 node_count = graph_data.get("node_count", 0)
                 edge_count = graph_data.get("edge_count", 0)
                 build_logger.info(f"[{task_id}] 图谱构建完成: graph_id={graph_id}, 节点={node_count}, 边={edge_count}")
@@ -488,7 +560,7 @@ def build_graph():
                         "graph_id": graph_id,
                         "node_count": node_count,
                         "edge_count": edge_count,
-                        "chunk_count": total_chunks
+                        "chunk_count": 0
                     }
                 )
                 

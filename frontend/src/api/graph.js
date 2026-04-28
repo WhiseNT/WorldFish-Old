@@ -18,6 +18,16 @@ export function generateOntology(formData) {
   )
 }
 
+export function generateOntologyFromProject(data) {
+  return requestWithRetry(() =>
+    service({
+      url: '/api/graph/ontology/generate-from-project',
+      method: 'post',
+      data
+    })
+  )
+}
+
 /**
  * 构建图谱
  * @param {Object} data - 包含project_id, graph_name等

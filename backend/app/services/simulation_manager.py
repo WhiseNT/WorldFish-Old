@@ -51,6 +51,10 @@ class SimulationState:
     enable_twitter: bool = True
     enable_reddit: bool = True
     
+    # 推演模式
+    simulation_mode: str = "unknown"  # unknown 或 known
+    time_range: Optional[str] = None
+    
     # 状态
     status: SimulationStatus = SimulationStatus.CREATED
     
@@ -83,6 +87,8 @@ class SimulationState:
             "graph_id": self.graph_id,
             "enable_twitter": self.enable_twitter,
             "enable_reddit": self.enable_reddit,
+            "simulation_mode": self.simulation_mode,
+            "time_range": self.time_range,
             "status": self.status.value,
             "entities_count": self.entities_count,
             "profiles_count": self.profiles_count,
@@ -103,6 +109,8 @@ class SimulationState:
             "simulation_id": self.simulation_id,
             "project_id": self.project_id,
             "graph_id": self.graph_id,
+            "simulation_mode": self.simulation_mode,
+            "time_range": self.time_range,
             "status": self.status.value,
             "entities_count": self.entities_count,
             "profiles_count": self.profiles_count,
@@ -174,6 +182,8 @@ class SimulationManager:
             graph_id=data.get("graph_id", ""),
             enable_twitter=data.get("enable_twitter", True),
             enable_reddit=data.get("enable_reddit", True),
+            simulation_mode=data.get("simulation_mode", "unknown"),
+            time_range=data.get("time_range"),
             status=SimulationStatus(data.get("status", "created")),
             entities_count=data.get("entities_count", 0),
             profiles_count=data.get("profiles_count", 0),
@@ -197,6 +207,8 @@ class SimulationManager:
         graph_id: str,
         enable_twitter: bool = True,
         enable_reddit: bool = True,
+        simulation_mode: str = "unknown",
+        time_range: Optional[str] = None,
     ) -> SimulationState:
         """
         创建新的模拟
@@ -206,6 +218,8 @@ class SimulationManager:
             graph_id: Zep图谱ID
             enable_twitter: 是否启用Twitter模拟
             enable_reddit: 是否启用Reddit模拟
+            simulation_mode: 推演模式，unknown或known
+            time_range: 时间范围
             
         Returns:
             SimulationState
@@ -219,6 +233,8 @@ class SimulationManager:
             graph_id=graph_id,
             enable_twitter=enable_twitter,
             enable_reddit=enable_reddit,
+            simulation_mode=simulation_mode,
+            time_range=time_range,
             status=SimulationStatus.CREATED,
         )
         

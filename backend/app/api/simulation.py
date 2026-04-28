@@ -57,18 +57,19 @@ def get_graph_entities(graph_id: str):
         enrich: 是否获取相关边信息（默认true）
     """
     try:
-        if not Config.ZEP_API_KEY:
+        is_local = graph_id.startswith("local_") if graph_id else False
+        if not Config.ZEP_API_KEY and not is_local:
             return jsonify({
                 "success": False,
-                "error": t('api.zepApiKeyMissing')
+                "error": "ZEP_API_KEY not configured and graph is not a local graph"
             }), 500
-        
+
         entity_types_str = request.args.get('entity_types', '')
         entity_types = [t.strip() for t in entity_types_str.split(',') if t.strip()] if entity_types_str else None
         enrich = request.args.get('enrich', 'true').lower() == 'true'
-        
-        logger.info(f"获取图谱实体: graph_id={graph_id}, entity_types={entity_types}, enrich={enrich}")
-        
+
+        logger.info(f"Reading graph entities: graph_id={graph_id}, entity_types={entity_types}, enrich={enrich}")
+
         reader = ZepEntityReader()
         result = reader.filter_defined_entities(
             graph_id=graph_id,
@@ -94,10 +95,11 @@ def get_graph_entities(graph_id: str):
 def get_entity_detail(graph_id: str, entity_uuid: str):
     """获取单个实体的详细信息"""
     try:
-        if not Config.ZEP_API_KEY:
+        is_local = graph_id.startswith("local_") if graph_id else False
+        if not Config.ZEP_API_KEY and not is_local:
             return jsonify({
                 "success": False,
-                "error": t('api.zepApiKeyMissing')
+                "error": "ZEP_API_KEY not configured"
             }), 500
         
         reader = ZepEntityReader()
@@ -127,10 +129,11 @@ def get_entity_detail(graph_id: str, entity_uuid: str):
 def get_entities_by_type(graph_id: str, entity_type: str):
     """获取指定类型的所有实体"""
     try:
-        if not Config.ZEP_API_KEY:
+        is_local = graph_id.startswith("local_") if graph_id else False
+        if not Config.ZEP_API_KEY and not is_local:
             return jsonify({
                 "success": False,
-                "error": t('api.zepApiKeyMissing')
+                "error": "ZEP_API_KEY not configured"
             }), 500
         
         enrich = request.args.get('enrich', 'true').lower() == 'true'
@@ -174,7 +177,9 @@ def create_simulation():
             "project_id": "proj_xxxx",      // 必填
             "graph_id": "mirofish_xxxx",    // 可选，如不提供则从project获取
             "enable_twitter": true,          // 可选，默认true
-            "enable_reddit": true            // 可选，默认true
+            "enable_reddit": true,           // 可选，默认true
+            "simulation_mode": "unknown",    // 可选，unknown或known，默认unknown
+            "time_range": "2024-2030"        // 可选，时间范围
         }
     
     返回：
@@ -187,6 +192,8 @@ def create_simulation():
                 "status": "created",
                 "enable_twitter": true,
                 "enable_reddit": true,
+                "simulation_mode": "unknown",
+                "time_range": "2024-2030",
                 "created_at": "2025-12-01T10:00:00"
             }
         }
@@ -221,6 +228,8 @@ def create_simulation():
             graph_id=graph_id,
             enable_twitter=data.get('enable_twitter', True),
             enable_reddit=data.get('enable_reddit', True),
+            simulation_mode=data.get('simulation_mode', 'unknown'),
+            time_range=data.get('time_range')
         )
         
         return jsonify({

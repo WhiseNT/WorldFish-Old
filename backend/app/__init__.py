@@ -63,10 +63,13 @@ def create_app(config_class=Config):
         return response
     
     # 注册蓝图
-    from .api import graph_bp, simulation_bp, report_bp
+    from .api import graph_bp, simulation_bp, report_bp, world_build_bp, project_bp, evolution_bp
     app.register_blueprint(graph_bp, url_prefix='/api/graph')
     app.register_blueprint(simulation_bp, url_prefix='/api/simulation')
     app.register_blueprint(report_bp, url_prefix='/api/report')
+    app.register_blueprint(world_build_bp, url_prefix='/api/world')
+    app.register_blueprint(project_bp, url_prefix='/api/project')
+    app.register_blueprint(evolution_bp, url_prefix='/api/evolution')
     
     # 健康检查
     @app.route('/health')

@@ -41,8 +41,8 @@ def main():
     port = int(os.environ.get('FLASK_PORT', 5001))
     debug = Config.DEBUG
     
-    # 启动服务
-    app.run(host=host, port=port, debug=debug, threaded=True)
+    # 启动服务（use_reloader=False 避免 Windows 下 Flask debug 模式产生僵尸子进程）
+    app.run(host=host, port=port, debug=debug, threaded=True, use_reloader=False)
 
 
 if __name__ == '__main__':

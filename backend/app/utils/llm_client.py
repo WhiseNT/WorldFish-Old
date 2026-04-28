@@ -31,6 +31,25 @@ class LLMClient:
             api_key=self.api_key,
             base_url=self.base_url
         )
+
+    @classmethod
+    def test_connection(
+        cls,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        client = cls(api_key=api_key, base_url=base_url, model=model)
+        reply = client.chat(
+            messages=[{"role": "user", "content": "Reply with OK only."}],
+            temperature=0,
+            max_tokens=16,
+        )
+        return {
+            "ok": True,
+            "model": client.model,
+            "reply": reply.strip(),
+        }
     
     def chat(
         self,

@@ -1,0 +1,71 @@
+import service from './index'
+
+// 世界观相关API
+export const worldApi = {
+  // 创建世界观
+  createWorld: (data) => {
+    return service.post('/api/world/create', data)
+  },
+
+  // 更新世界观
+  updateWorld: (worldId, data) => {
+    return service.put(`/api/world/${worldId}`, data)
+  },
+  
+  // 从文本提取世界观信息（长文本可能需较长时间）
+  extractWorld: (text) => {
+    return service.post('/api/world/extract', { text }, { timeout: 1800000 })
+  },
+
+  // 从文件提取世界观信息（axios 自动处理 Content-Type 和 boundary）
+  extractWorldFromFile: (formData) => {
+    return service.post('/api/world/extract', formData, { timeout: 1800000 })
+  },
+
+  // 获取 LLM 配置状态
+  getLlmConfig: () => {
+    return service.get('/api/world/llm-config')
+  },
+
+  // 保存 LLM 配置
+  saveLlmConfig: (data) => {
+    return service.put('/api/world/llm-config', data)
+  },
+
+  // 测试 LLM 配置
+  testLlmConfig: (data) => {
+    return service.post('/api/world/llm-config/test', data)
+  },
+  
+  // 添加实体
+  addEntity: (worldId, data) => {
+    return service.post(`/api/world/${worldId}/entities`, data)
+  },
+  
+  // 添加事件
+  addEvent: (worldId, data) => {
+    return service.post(`/api/world/${worldId}/events`, data)
+  },
+  
+  // 获取世界观详情
+  getWorld: (worldId) => {
+    return service.get(`/api/world/${worldId}`)
+  },
+
+  // 列出所有世界观
+  listWorlds: () => {
+    return service.get('/api/world/list')
+  },
+
+  // 删除世界观
+  deleteWorld: (worldId) => {
+    return service.delete(`/api/world/${worldId}`)
+  },
+
+  // 轮询提取进度
+  getExtractProgress: (taskId) => {
+    return service.get(`/api/world/extract/${taskId}/progress`)
+  },
+}
+
+export default worldApi

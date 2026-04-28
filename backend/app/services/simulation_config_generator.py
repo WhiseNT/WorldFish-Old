@@ -250,6 +250,8 @@ class SimulationConfigGenerator:
         entities: List[EntityNode],
         enable_twitter: bool = True,
         enable_reddit: bool = True,
+        simulation_mode: str = "unknown",
+        time_range: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> SimulationParameters:
         """
@@ -264,6 +266,8 @@ class SimulationConfigGenerator:
             entities: 过滤后的实体列表
             enable_twitter: 是否启用Twitter
             enable_reddit: 是否启用Reddit
+            simulation_mode: 推演模式，unknown或known
+            time_range: 时间范围
             progress_callback: 进度回调函数(current_step, total_steps, message)
             
         Returns:
@@ -287,7 +291,9 @@ class SimulationConfigGenerator:
         context = self._build_context(
             simulation_requirement=simulation_requirement,
             document_text=document_text,
-            entities=entities
+            entities=entities,
+            simulation_mode=simulation_mode,
+            time_range=time_range
         )
         
         reasoning_parts = []
@@ -382,7 +388,9 @@ class SimulationConfigGenerator:
         self,
         simulation_requirement: str,
         document_text: str,
-        entities: List[EntityNode]
+        entities: List[EntityNode],
+        simulation_mode: str = "unknown",
+        time_range: Optional[str] = None
     ) -> str:
         """构建LLM上下文，截断到最大长度"""
         
@@ -392,6 +400,8 @@ class SimulationConfigGenerator:
         # 构建上下文
         context_parts = [
             f"## 模拟需求\n{simulation_requirement}",
+            f"\n## 推演模式\n{simulation_mode}",
+            f"\n## 时间范围\n{time_range or '未指定'}",
             f"\n## 实体信息 ({len(entities)}个)\n{entity_summary}",
         ]
         

@@ -1,52 +1,34 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
-import Process from '../views/MainView.vue'
-import SimulationView from '../views/SimulationView.vue'
-import SimulationRunView from '../views/SimulationRunView.vue'
-import ReportView from '../views/ReportView.vue'
-import InteractionView from '../views/InteractionView.vue'
+import WorldBuilderView from '../views/WorldBuilderView.vue'
 
 const routes = [
   {
     path: '/',
     name: 'Home',
-    component: Home
+    component: Home,
   },
   {
-    path: '/process/:projectId',
-    name: 'Process',
-    component: Process,
-    props: true
+    path: '/world-builder',
+    name: 'WorldBuilder',
+    component: WorldBuilderView,
   },
   {
-    path: '/simulation/:simulationId',
-    name: 'Simulation',
-    component: SimulationView,
-    props: true
+    path: '/simulation/new',
+    name: 'SimulationSetup',
+    component: () => import('../views/SimulationSetup.vue'),
   },
   {
-    path: '/simulation/:simulationId/start',
-    name: 'SimulationRun',
-    component: SimulationRunView,
-    props: true
+    path: '/simulation/:id',
+    name: 'SimulationEvolution',
+    component: () => import('../views/SimulationEvolution.vue'),
+    props: true,
   },
-  {
-    path: '/report/:reportId',
-    name: 'Report',
-    component: ReportView,
-    props: true
-  },
-  {
-    path: '/interaction/:reportId',
-    name: 'Interaction',
-    component: InteractionView,
-    props: true
-  }
 ]
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
 })
 
 export default router
