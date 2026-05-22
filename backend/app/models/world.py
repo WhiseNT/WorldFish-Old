@@ -431,6 +431,34 @@ class WorldSetting:
             map_lines.append(f"国家关系: {map_data['countryRelations']}")
         if map_data.get("importantLocations"):
             map_lines.append(f"重要地点: {map_data['importantLocations']}")
+        structured_maps = map_data.get("structuredMaps") if isinstance(map_data.get("structuredMaps"), list) else []
+        for map_item in structured_maps[:5]:
+            if not isinstance(map_item, dict):
+                continue
+            cells = map_item.get("cells") if isinstance(map_item.get("cells"), list) else []
+            map_lines.append(
+                f"结构化地图《{map_item.get('name') or '未命名地图'}》: "
+                f"类型={map_item.get('type') or 'world'}，尺寸={map_item.get('width')}x{map_item.get('height')}，区域数={len(cells)}"
+            )
+            notable_cells = []
+            for cell in cells:
+                if not isinstance(cell, dict):
+                    continue
+                if cell.get("name") or cell.get("faction") or cell.get("resources") or cell.get("status") not in ("normal", ""):
+                    parts = [cell.get("name") or cell.get("id") or "未命名区域"]
+                    if cell.get("terrain"):
+                        parts.append(f"地形={cell.get('terrain')}")
+                    if cell.get("faction"):
+                        parts.append(f"势力={cell.get('faction')}")
+                    if cell.get("resources"):
+                        parts.append(f"资源={', '.join(str(item) for item in cell.get('resources') or [])}")
+                    if cell.get("status") and cell.get("status") != "normal":
+                        parts.append(f"状态={cell.get('status')}")
+                    notable_cells.append("；".join(parts))
+                if len(notable_cells) >= 12:
+                    break
+            if notable_cells:
+                map_lines.append("重要地图区域: " + " | ".join(notable_cells))
         if map_lines:
             sections.append("地图与地点:\n" + "\n".join(f"- {line}" for line in map_lines))
 

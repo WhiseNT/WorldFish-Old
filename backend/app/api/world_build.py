@@ -1,5 +1,6 @@
 """世界观构建 API。"""
 
+import copy
 import os
 import uuid
 import threading
@@ -9,6 +10,21 @@ from flask import request, jsonify
 from . import world_build_bp
 from app.config import Config
 from app.models.world import WorldManager
+from app.models.map import (
+    add_change_record,
+    apply_batch_update,
+    apply_cell_update,
+    cell_neighbors,
+    find_cell,
+    find_map,
+    list_maps as list_structured_maps,
+    map_id as create_map_id,
+    normalize_map,
+    save_maps,
+    search_cells,
+    stats_for_map,
+    summarize_map,
+)
 from app.services.enhanced_world_extractor import EnhancedWorldExtractor
 from app.utils.file_parser import FileParser
 from app.utils.llm_client import LLMClient
@@ -433,6 +449,291 @@ def test_llm_config():
             'success': False,
             'message': f'测试失败: {str(e)}'
         }), 400
+
+
+def _get_world_or_404(world_id):
+    world = WorldManager.get_world(world_id)
+    if not world:
+        return None, (jsonify({'success': False, 'message': '世界观不存在'}), 404)
+    return world, None
+
+
+@world_build_bp.route('/<world_id>/maps', methods=['GET'])
+def list_world_maps(world_id):
+    """列出世界观下的结构化地图。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        maps = list_structured_maps(world)
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'maps': [summarize_map(item) for item in maps]})
+    except Exception as e:
+        logger.error(f"列出地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'获取失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps', methods=['POST'])
+def create_world_map(world_id):
+    """创建结构化六边形地图。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        data = request.json or {}
+        maps = list_structured_maps(world)
+        new_id = create_map_id()
+        raw_map = {
+            'id': new_id,
+            'world_id': world_id,
+            'name': data.get('name') or '未命名地图',
+            'description': data.get('description') or '',
+            'type': data.get('type') or 'world',
+            'width': data.get('width') or 12,
+            'height': data.get('height') or 8,
+            'is_default': bool(data.get('is_default') or not maps),
+        }
+        created = normalize_map(raw_map, world_id)
+        if created.get('is_default'):
+            for item in maps:
+                item['is_default'] = False
+        maps.append(created)
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'map': created, 'message': '地图创建成功'})
+    except Exception as e:
+        logger.error(f"创建地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'创建失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>', methods=['GET'])
+def get_world_map(world_id, map_id):
+    """获取完整地图。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        maps = list_structured_maps(world)
+        target = find_map(maps, map_id)
+        if not target:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        return jsonify({'success': True, 'map': target, 'stats': stats_for_map(target)})
+    except Exception as e:
+        logger.error(f"获取地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'获取失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>', methods=['PUT'])
+def update_world_map(world_id, map_id):
+    """更新地图基础信息。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        data = request.json or {}
+        maps = list_structured_maps(world)
+        target = find_map(maps, map_id)
+        if not target:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        before = copy.deepcopy(summarize_map(target))
+        for field in ['name', 'description', 'type']:
+            if field in data:
+                target[field] = str(data.get(field) or '').strip()
+        if 'view' in data and isinstance(data.get('view'), dict):
+            target['view'] = {**target.get('view', {}), **data['view']}
+        from app.models.map import now_iso
+        target['updated_at'] = now_iso()
+        add_change_record(target, 'map', map_id, before, summarize_map(target), source=data.get('source') or 'user')
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'map': target, 'message': '地图已更新'})
+    except Exception as e:
+        logger.error(f"更新地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'更新失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>', methods=['DELETE'])
+def delete_world_map(world_id, map_id):
+    """删除结构化地图。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        maps = list_structured_maps(world)
+        remaining = [item for item in maps if item.get('id') != map_id]
+        if len(remaining) == len(maps):
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        save_maps(world, remaining)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'message': '地图已删除'})
+    except Exception as e:
+        logger.error(f"删除地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'删除失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>/duplicate', methods=['POST'])
+def duplicate_world_map(world_id, map_id):
+    """复制地图。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        maps = list_structured_maps(world)
+        target = find_map(maps, map_id)
+        if not target:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        copied = copy.deepcopy(target)
+        new_id = create_map_id()
+        copied['id'] = new_id
+        copied['name'] = f"{target.get('name') or '地图'} 副本"
+        copied['is_default'] = False
+        for cell in copied.get('cells', []):
+            cell['map_id'] = new_id
+        copied = normalize_map(copied, world_id)
+        maps.append(copied)
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'map': copied, 'message': '地图已复制'})
+    except Exception as e:
+        logger.error(f"复制地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'复制失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>/default', methods=['PUT'])
+def set_default_world_map(world_id, map_id):
+    """设置默认地图。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        maps = list_structured_maps(world)
+        target = find_map(maps, map_id)
+        if not target:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        for item in maps:
+            item['is_default'] = item.get('id') == map_id
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'maps': [summarize_map(item) for item in maps], 'message': '默认地图已更新'})
+    except Exception as e:
+        logger.error(f"设置默认地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'设置失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>/cells/<cell_id>', methods=['PUT'])
+def update_world_map_cell(world_id, map_id, cell_id):
+    """更新地图单元。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        data = request.json or {}
+        maps = list_structured_maps(world)
+        target_map = find_map(maps, map_id)
+        if not target_map:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        target_cell = find_cell(target_map, cell_id)
+        if not target_cell:
+            return jsonify({'success': False, 'message': '地图单元不存在'}), 404
+        before = copy.deepcopy(target_cell)
+        updated = apply_cell_update(target_cell, data)
+        target_map['cells'] = [updated if cell.get('id') == cell_id else cell for cell in target_map.get('cells', [])]
+        target_map['updated_at'] = updated.get('updated_at')
+        add_change_record(target_map, 'cell', cell_id, before, updated, source=data.get('source') or 'user', agent=bool(data.get('is_agent')))
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'cell': updated, 'message': '地图单元已更新'})
+    except Exception as e:
+        logger.error(f"更新地图单元失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'更新失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>/cells/batch', methods=['POST'])
+def batch_update_world_map_cells(world_id, map_id):
+    """批量更新地图单元。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        data = request.json or {}
+        cell_ids = set(data.get('cell_ids') or [])
+        if not cell_ids:
+            return jsonify({'success': False, 'message': '请提供要修改的地图单元'}), 400
+        updates = data.get('updates') if isinstance(data.get('updates'), dict) else {}
+        maps = list_structured_maps(world)
+        target_map = find_map(maps, map_id)
+        if not target_map:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        changed = []
+        new_cells = []
+        for cell in target_map.get('cells', []):
+            if cell.get('id') in cell_ids:
+                before = copy.deepcopy(cell)
+                updated = apply_batch_update(cell, updates)
+                changed.append(updated)
+                add_change_record(target_map, 'cell', cell.get('id'), before, updated, source=data.get('source') or 'user', agent=bool(data.get('is_agent')))
+                new_cells.append(updated)
+            else:
+                new_cells.append(cell)
+        target_map['cells'] = new_cells
+        from app.models.map import now_iso
+        target_map['updated_at'] = now_iso()
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return jsonify({'success': True, 'updated_count': len(changed), 'cells': changed, 'message': f'已更新 {len(changed)} 个地图单元'})
+    except Exception as e:
+        logger.error(f"批量更新地图单元失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'批量更新失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>/search', methods=['GET'])
+def search_world_map(world_id, map_id):
+    """搜索地图单元。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        query = request.args.get('q', '')
+        maps = list_structured_maps(world)
+        target_map = find_map(maps, map_id)
+        if not target_map:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        results = search_cells(target_map, query)[:100]
+        compact = [{
+            'id': cell.get('id'),
+            'q': cell.get('q'),
+            'r': cell.get('r'),
+            'name': cell.get('name'),
+            'terrain': cell.get('terrain'),
+            'status': cell.get('status'),
+            'faction': cell.get('faction'),
+            'resources': cell.get('resources') or [],
+        } for cell in results]
+        return jsonify({'success': True, 'results': compact, 'total': len(results)})
+    except Exception as e:
+        logger.error(f"搜索地图失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'搜索失败: {str(e)}'}), 500
+
+
+@world_build_bp.route('/<world_id>/maps/<map_id>/cells/<cell_id>/neighbors', methods=['GET'])
+def get_world_map_cell_neighbors(world_id, map_id, cell_id):
+    """获取地图单元邻接关系。"""
+    try:
+        world, error = _get_world_or_404(world_id)
+        if error:
+            return error
+        maps = list_structured_maps(world)
+        target_map = find_map(maps, map_id)
+        if not target_map:
+            return jsonify({'success': False, 'message': '地图不存在'}), 404
+        target_cell = find_cell(target_map, cell_id)
+        if not target_cell:
+            return jsonify({'success': False, 'message': '地图单元不存在'}), 404
+        return jsonify({'success': True, 'neighbors': cell_neighbors(target_map, target_cell)})
+    except Exception as e:
+        logger.error(f"获取邻接单元失败: {str(e)}")
+        return jsonify({'success': False, 'message': f'获取失败: {str(e)}'}), 500
 
 
 @world_build_bp.route('/<world_id>/entities', methods=['POST'])

@@ -843,38 +843,51 @@
       <!-- 地图 -->
       <div v-if="activeTab === 'map'" class="tab-pane map-section">
         <div class="section-header">
-          <h3 class="section-title">世界地图</h3>
-          <p class="section-description">定义世界地理和地区关系</p>
+          <h3 class="section-title">世界观结构化地图</h3>
+          <p class="section-description">用区域单元承载地形、势力、资源、事件和世界观实体位置。</p>
         </div>
-        <div class="map-form">
-          <div class="form-group">
-            <label class="form-label">地区关系</label>
-            <textarea 
-              v-model="mapData.regionRelations" 
-              placeholder="描述各个地区之间的关系，如地理、政治、经济等..."
-              rows="4"
-              class="form-textarea"
-            ></textarea>
+
+        <WorldMapEditor
+          :world-id="worldId"
+          :initial-maps="mapData.structuredMaps || []"
+          :entities="entities"
+          :events="events"
+          @need-world-id="ensureWorldId"
+          @maps-change="updateStructuredMaps"
+        />
+
+        <details class="legacy-map-details">
+          <summary>旧版地图概述文本</summary>
+          <div class="map-form legacy-map-form">
+            <div class="form-group">
+              <label class="form-label">地区关系</label>
+              <textarea 
+                v-model="mapData.regionRelations" 
+                placeholder="描述各个地区之间的关系，如地理、政治、经济等..."
+                rows="4"
+                class="form-textarea"
+              ></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">国家地域关系</label>
+              <textarea 
+                v-model="mapData.countryRelations" 
+                placeholder="描述国家之间的地域关系，如边界、领土、外交等..."
+                rows="4"
+                class="form-textarea"
+              ></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">重要地理位置</label>
+              <textarea 
+                v-model="mapData.importantLocations" 
+                placeholder="描述重要的地理位置，如城市、山脉、河流等..."
+                rows="4"
+                class="form-textarea"
+              ></textarea>
+            </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">国家地域关系</label>
-            <textarea 
-              v-model="mapData.countryRelations" 
-              placeholder="描述国家之间的地域关系，如边界、领土、外交等..."
-              rows="4"
-              class="form-textarea"
-            ></textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">重要地理位置</label>
-            <textarea 
-              v-model="mapData.importantLocations" 
-              placeholder="描述重要的地理位置，如城市、山脉、河流等..."
-              rows="4"
-              class="form-textarea"
-            ></textarea>
-          </div>
-        </div>
+        </details>
       </div>
 
       <!-- 历法编辑窗口 -->
@@ -1309,6 +1322,7 @@ import { worldApi } from '../api/world'
 import { projectApi } from '../api/project'
 import { generateOntologyFromProject } from '../api/graph'
 import service from '../api/index'
+import WorldMapEditor from '../components/map/WorldMapEditor.vue'
 
 const SETTING_CATEGORY_OPTIONS = [
   { id: 'character', name: '角色', icon: '👤' },
@@ -1322,7 +1336,8 @@ const SETTING_CATEGORY_OPTIONS = [
 const createDefaultMapData = () => ({
   regionRelations: '',
   countryRelations: '',
-  importantLocations: ''
+  importantLocations: '',
+  structuredMaps: []
 })
 
 const createDefaultSettingCategories = () => SETTING_CATEGORY_OPTIONS.map((category, index) => ({
@@ -2613,6 +2628,7 @@ const normalizeExtractedSettings = (settings) => {
     regionRelations: _normalizeMapField(rawMapData.regionRelations || rawMapData['区域关系']),
     countryRelations: _normalizeMapField(rawMapData.countryRelations || rawMapData['国家关系'] || rawMapData['政区关系']),
     importantLocations: _normalizeMapField(rawMapData.importantLocations || rawMapData['重要地点'] || rawMapData['地理环境']),
+    structuredMaps: Array.isArray(rawMapData.structuredMaps) ? rawMapData.structuredMaps : [],
   }
 
   const extractedItems = Array.isArray(settings.items) ? settings.items : []
@@ -2753,6 +2769,7 @@ const mergeCalendarsByName = (currentCalendars = [], incomingCalendars = []) => 
 
 export default {
   name: 'WorldBuilderView',
+  components: { WorldMapEditor },
   data() {
     return {
       worldId: '',
@@ -3305,6 +3322,13 @@ export default {
         hour: '2-digit',
         minute: '2-digit',
       }).format(date)
+    },
+    updateStructuredMaps(maps) {
+      this.mapData = {
+        ...this.mapData,
+        structuredMaps: JSON.parse(JSON.stringify(maps || []))
+      }
+      this.saveStatus = '地图已更新，记得保存世界观'
     },
     buildWorldPayload() {
       this.syncEntitySettingLinks()
@@ -7101,5 +7125,23 @@ export default {
 .config-feedback.success { background: #ecfdf5; border: 1px solid #86efac; color: var(--wf-success); }
 .config-feedback.error { background: rgba(255, 71, 87, 0.1); border: 1px solid #fca5a5; color: var(--wf-danger); }
 
+.legacy-map-details {
+  margin-top: var(--spacing-lg);
+  border: 1px solid var(--wf-border);
+  border-radius: var(--radius-lg);
+  background: var(--wf-bg-card);
+  color: var(--wf-text-primary);
+  padding: var(--spacing-md);
+}
+
+.legacy-map-details summary {
+  cursor: pointer;
+  color: var(--wf-text-secondary);
+  font-weight: 600;
+}
+
+.legacy-map-form {
+  margin-top: var(--spacing-md);
+}
 </style>
 

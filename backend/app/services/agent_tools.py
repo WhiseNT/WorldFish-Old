@@ -13,6 +13,19 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..config import Config
 from ..models.world import WorldManager, Entity, Event, WorldSetting
+from ..models.map import (
+    add_change_record,
+    apply_batch_update,
+    apply_cell_update,
+    cell_neighbors,
+    find_cell,
+    find_map,
+    list_maps as list_structured_maps,
+    save_maps,
+    search_cells,
+    stats_for_map,
+    summarize_map,
+)
 from ..models.agent import AgentManager, Skill, MemoryEntry
 from ..services.timeline_manager import TimelineManager
 from ..utils.logger import get_logger
@@ -265,6 +278,183 @@ class SearchKnowledgeTool(BaseTool):
             return ToolCallResult(False, str(e))
         except Exception as e:
             return ToolCallResult(False, f"检索失败: {e}")
+
+
+class ListMapsTool(BaseTool):
+    name = "list_maps"
+    description = "列出当前世界观中的结构化地图。用于了解有哪些世界地图、大陆地图、国家地图或区域地图。"
+    parameters = {}
+
+    def execute(self, world_id: str = "", **kwargs) -> ToolCallResult:
+        if not world_id:
+            return ToolCallResult(False, "未指定世界观 ID。")
+        world = WorldManager.get_world(world_id)
+        if not world:
+            return ToolCallResult(False, f"世界观 {world_id} 不存在。")
+        maps = list_structured_maps(world)
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        data = [summarize_map(item) for item in maps]
+        if not data:
+            return ToolCallResult(True, "当前世界观还没有结构化地图。", data=[])
+        return ToolCallResult(True, json.dumps(data, ensure_ascii=False, indent=2), data=data)
+
+
+class ReadMapTool(BaseTool):
+    name = "read_map"
+    description = "读取指定地图的摘要、尺寸、图层统计和部分重要区域。不会返回全部格子，适合先了解地图全貌。"
+    parameters = {
+        "map_id": {"type": "string", "description": "地图 ID"}
+    }
+
+    def execute(self, world_id: str = "", map_id: str = "", **kwargs) -> ToolCallResult:
+        if not world_id or not map_id:
+            return ToolCallResult(False, "缺少世界观 ID 或地图 ID。")
+        world = WorldManager.get_world(world_id)
+        if not world:
+            return ToolCallResult(False, f"世界观 {world_id} 不存在。")
+        target = find_map(list_structured_maps(world), map_id)
+        if not target:
+            return ToolCallResult(False, f"地图 {map_id} 不存在。")
+        notable = []
+        for cell in target.get("cells", []):
+            if cell.get("name") or cell.get("faction") or cell.get("resources") or cell.get("event_relations") or cell.get("status") not in ("normal", ""):
+                notable.append({
+                    "id": cell.get("id"), "name": cell.get("name"), "coord": [cell.get("q"), cell.get("r")],
+                    "terrain": cell.get("terrain"), "status": cell.get("status"), "faction": cell.get("faction"),
+                    "resources": cell.get("resources", []),
+                })
+        data = {"summary": summarize_map(target), "stats": stats_for_map(target), "notable_cells": notable[:30]}
+        return ToolCallResult(True, json.dumps(data, ensure_ascii=False, indent=2), data=data)
+
+
+class SearchMapCellsTool(BaseTool):
+    name = "search_map_cells"
+    description = "在指定地图中搜索区域名称、地形、势力、资源、状态、地点、实体或事件。"
+    parameters = {
+        "map_id": {"type": "string", "description": "地图 ID"},
+        "query": {"type": "string", "description": "搜索关键词，如 北方王国、铁矿、战争中、森林"},
+        "limit": {"type": "integer", "description": "返回数量上限，默认 20"},
+    }
+
+    def execute(self, world_id: str = "", map_id: str = "", query: str = "", limit: int = 20, **kwargs) -> ToolCallResult:
+        if not world_id or not map_id:
+            return ToolCallResult(False, "缺少世界观 ID 或地图 ID。")
+        world = WorldManager.get_world(world_id)
+        if not world:
+            return ToolCallResult(False, f"世界观 {world_id} 不存在。")
+        target = find_map(list_structured_maps(world), map_id)
+        if not target:
+            return ToolCallResult(False, f"地图 {map_id} 不存在。")
+        limit = max(1, min(int(limit or 20), 100))
+        cells = search_cells(target, query)[:limit]
+        data = [{
+            "id": cell.get("id"), "name": cell.get("name"), "coord": [cell.get("q"), cell.get("r")],
+            "terrain": cell.get("terrain"), "status": cell.get("status"), "faction": cell.get("faction"),
+            "resources": cell.get("resources", []), "locations": cell.get("locations", []),
+        } for cell in cells]
+        return ToolCallResult(True, f"找到 {len(data)} 个地图单元\n" + json.dumps(data, ensure_ascii=False), data=data)
+
+
+class GetMapCellDetailTool(BaseTool):
+    name = "get_map_cell_detail"
+    description = "读取指定地图单元完整详情，并返回相邻单元摘要。"
+    parameters = {
+        "map_id": {"type": "string", "description": "地图 ID"},
+        "cell_id": {"type": "string", "description": "地图单元 ID"},
+    }
+
+    def execute(self, world_id: str = "", map_id: str = "", cell_id: str = "", **kwargs) -> ToolCallResult:
+        if not world_id or not map_id or not cell_id:
+            return ToolCallResult(False, "缺少 world_id、map_id 或 cell_id。")
+        world = WorldManager.get_world(world_id)
+        if not world:
+            return ToolCallResult(False, f"世界观 {world_id} 不存在。")
+        target = find_map(list_structured_maps(world), map_id)
+        if not target:
+            return ToolCallResult(False, f"地图 {map_id} 不存在。")
+        cell = find_cell(target, cell_id)
+        if not cell:
+            return ToolCallResult(False, f"地图单元 {cell_id} 不存在。")
+        neighbors = [{"id": item.get("id"), "name": item.get("name"), "coord": [item.get("q"), item.get("r")], "terrain": item.get("terrain"), "faction": item.get("faction")} for item in cell_neighbors(target, cell)]
+        data = {"cell": cell, "neighbors": neighbors}
+        return ToolCallResult(True, json.dumps(data, ensure_ascii=False, indent=2), data=data)
+
+
+class UpdateMapCellTool(BaseTool):
+    name = "update_map_cell"
+    description = "修改一个明确指定的地图单元。必须已经知道 map_id 和 cell_id；目标不明确时不要调用，先搜索或询问用户。"
+    parameters = {
+        "map_id": {"type": "string", "description": "地图 ID"},
+        "cell_id": {"type": "string", "description": "地图单元 ID"},
+        "updates": {"type": "object", "description": "要更新的字段，如 name、description、terrain、status、faction、resources、locations、entity_relations、event_relations、notes"},
+    }
+
+    def execute(self, world_id: str = "", map_id: str = "", cell_id: str = "", updates: dict = None, **kwargs) -> ToolCallResult:
+        if not world_id or not map_id or not cell_id:
+            return ToolCallResult(False, "缺少 world_id、map_id 或 cell_id。")
+        updates = updates or {}
+        if not updates:
+            return ToolCallResult(False, "没有提供要修改的地图字段。")
+        world = WorldManager.get_world(world_id)
+        if not world:
+            return ToolCallResult(False, f"世界观 {world_id} 不存在。")
+        maps = list_structured_maps(world)
+        target = find_map(maps, map_id)
+        if not target:
+            return ToolCallResult(False, f"地图 {map_id} 不存在。")
+        cell = find_cell(target, cell_id)
+        if not cell:
+            return ToolCallResult(False, f"地图单元 {cell_id} 不存在。")
+        before = copy.deepcopy(cell)
+        updated = apply_cell_update(cell, updates)
+        target["cells"] = [updated if item.get("id") == cell_id else item for item in target.get("cells", [])]
+        target["updated_at"] = updated.get("updated_at")
+        add_change_record(target, "cell", cell_id, before, updated, source="agent", agent=True)
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return ToolCallResult(True, f"✅ 地图单元 {cell_id} 已更新。", data=updated)
+
+
+class BatchUpdateMapCellsTool(BaseTool):
+    name = "batch_update_map_cells"
+    description = "批量修改一组明确指定的地图单元。必须提供明确 cell_ids；不要对模糊目标直接调用。"
+    parameters = {
+        "map_id": {"type": "string", "description": "地图 ID"},
+        "cell_ids": {"type": "array", "description": "地图单元 ID 列表"},
+        "updates": {"type": "object", "description": "批量更新字段，如 terrain、status、faction、resources、tags、clear_faction、clear_resources"},
+    }
+
+    def execute(self, world_id: str = "", map_id: str = "", cell_ids: list = None, updates: dict = None, **kwargs) -> ToolCallResult:
+        if not world_id or not map_id:
+            return ToolCallResult(False, "缺少 world_id 或 map_id。")
+        cell_ids = [str(item) for item in (cell_ids or []) if str(item).strip()]
+        if not cell_ids:
+            return ToolCallResult(False, "没有提供明确的 cell_ids。目标区域不明确时，请先搜索或询问用户确认。")
+        updates = updates or {}
+        world = WorldManager.get_world(world_id)
+        if not world:
+            return ToolCallResult(False, f"世界观 {world_id} 不存在。")
+        maps = list_structured_maps(world)
+        target = find_map(maps, map_id)
+        if not target:
+            return ToolCallResult(False, f"地图 {map_id} 不存在。")
+        id_set = set(cell_ids)
+        changed = []
+        new_cells = []
+        for cell in target.get("cells", []):
+            if cell.get("id") in id_set:
+                before = copy.deepcopy(cell)
+                updated = apply_batch_update(cell, updates)
+                changed.append(updated)
+                add_change_record(target, "cell", cell.get("id"), before, updated, source="agent", agent=True)
+                new_cells.append(updated)
+            else:
+                new_cells.append(cell)
+        target["cells"] = new_cells
+        save_maps(world, maps)
+        WorldManager.save_world(world)
+        return ToolCallResult(True, f"✅ 已批量更新 {len(changed)} 个地图单元。", data=changed)
 
 
 class GetRagStatsTool(BaseTool):
@@ -1098,6 +1288,10 @@ ALL_TOOLS: List[BaseTool] = [
     ListEventsTool(),
     GetEventDetailTool(),
     ReadSettingsTool(),
+    ListMapsTool(),
+    ReadMapTool(),
+    SearchMapCellsTool(),
+    GetMapCellDetailTool(),
     SearchKnowledgeTool(),
     GetRagStatsTool(),
     ListRagDocsTool(),
@@ -1109,6 +1303,8 @@ ALL_TOOLS: List[BaseTool] = [
     UpdateEventTool(),
     DeleteEventTool(),
     UpdateWorldMetaTool(),
+    UpdateMapCellTool(),
+    BatchUpdateMapCellsTool(),
     ListCalendarsTool(),
     GetCalendarDetailTool(),
     CreateCalendarTool(),
